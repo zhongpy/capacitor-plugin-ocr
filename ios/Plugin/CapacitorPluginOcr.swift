@@ -214,6 +214,114 @@ class CapacitorPluginOcr: NSObject {
         ]
     }
     
+    // MARK: - Crop Methods
+    
+    @objc func cropImage(_ call: CAPPluginCall) {
+        guard let imagePath = call.getString("imagePath"),
+              let cropData = call.getObject("cropArea") else {
+            call.reject("Image path and crop area are required")
+            return
+        }
+        
+        let x = cropData["x"] as? Double ?? 0
+        let y = cropData["y"] as? Double ?? 0
+        let width = cropData["width"] as? Double ?? 1
+        let height = cropData["height"] as? Double ?? 1
+        
+        var image: UIImage?
+        
+        if imagePath.hasPrefix("file://") {
+            let path = String(imagePath.dropFirst(7))
+            image = UIImage(contentsOfFile: path)
+        } else {
+            image = UIImage(contentsOfFile: imagePath)
+        }
+        
+        guard let originalImage = image, let cgImage = originalImage.cgImage else {
+            call.reject("Could not load image")
+            return
+        }
+        
+        let imgWidth = CGFloat(cgImage.width)
+        let imgHeight = CGFloat(cgImage.height)
+        
+        let cropX = Int(x * imgWidth)
+        let cropY = Int(y * imgHeight)
+        let cropW = Int(width * imgWidth)
+        let cropH = Int(height * imgHeight)
+        
+        guard let croppedCGImage = cgImage.cropping(to: CGRect(x: cropX, y: cropY, width: cropW, height: cropH)) else {
+            call.reject("Could not crop image")
+            return
+        }
+        
+        let croppedImage = UIImage(cgImage: croppedCGImage, scale: originalImage.scale, orientation: originalImage.imageOrientation)
+        
+        // Save to temp file
+        guard let data = croppedImage.jpegData(compressionQuality: 0.9) else {
+            call.reject("Could not create image data")
+            return
+        }
+        
+        let tempDir = NSTemporaryDirectory()
+        let fileName = "cropped_\(Int(Date().timeIntervalSince1970 * 1000)).jpg"
+        let filePath = (tempDir as NSString).appendingPathComponent(fileName)
+        
+        do {
+            try data.write(to: URL(fileURLWithPath: filePath))
+            call.resolve(["croppedImagePath": filePath])
+        } catch {
+            call.reject("Could not save cropped image: \(error.localizedDescription)")
+        }
+    }
+    
+    @objc func startCropUI(_ call: CAPPluginCall) {
+        guard let imagePath = call.getString("imagePath") else {
+            call.reject("Image path is required")
+            return
+        }
+        
+        var image: UIImage?
+        
+        if imagePath.hasPrefix("file://") {
+            let path = String(imagePath.dropFirst(7))
+            image = UIImage(contentsOfFile: path)
+        } else {
+            image = UIImage(contentsOfFile: imagePath)
+        }
+        
+        guard let selectedImage = image else {
+            call.reject("Could not load image")
+            return
+        }
+        
+        // For iOS, we'll use the built-in crop view controller
+        // This requires implementing a custom UIImagePickerController or using a library
+        // For now, we'll just reject with a message to implement custom UI
+        
+        pendingCall = call
+        
+        // Present image picker with crop enabled
+        DispatchQueue.main.async { [weak self] in
+            guard let self = self else { return }
+            
+            if UIImagePickerController.isSourceTypeAvailable(.photoLibrary) {
+                let picker = UIImagePickerController()
+                picker.sourceType = .photoLibrary
+                picker.delegate = self
+                picker.allowsEditing = true
+                
+                if let vc = self.bridge?.viewController {
+                    vc.present(picker, animated: true)
+                } else {
+                    call.reject("Could not present picker")
+                }
+            } else {
+                call.reject("Photo library not available")
+            }
+        }
+    }
+    
     // Simple lemmatizer using common rules
     private func lemmatize(_ word: String) -> String {
         let lowerWord = word.lowercased()

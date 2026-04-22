@@ -127,11 +127,62 @@ const result = await recognizeEnglishFromImage("/path/to/image.jpg")
 
 ### 方法
 
-| 方法                                  | 描述             |
-| ------------------------------------- | ---------------- |
-| `checkPermissions()`                  | 检查权限状态     |
-| `requestPermissions()`                | 请求权限         |
-| `recognizeEnglishText({ imagePath })` | 识别图片中的英文 |
+| 方法                                             | 描述                         |
+| ------------------------------------------------ | ---------------------------- |
+| `checkPermissions()`                             | 检查权限状态                 |
+| `requestPermissions()`                           | 请求权限                     |
+| `recognizeEnglishText({ imagePath, cropArea? })` | 识别图片中的英文（可选裁剪） |
+| `cropImage({ imagePath, cropArea })`             | 裁剪图片                     |
+| `startCropUI({ imagePath })`                     | 启动交互式裁剪UI             |
+
+### 裁剪区域格式
+
+```typescript
+interface CropArea {
+	x: number // 左上角X坐标（0-1）
+	y: number // 左上角Y坐标（0-1）
+	width: number // 宽度（0-1）
+	height: number // 高度（0-1）
+}
+```
+
+### 使用示例
+
+```typescript
+// 1. 编程式裁剪 - 指定区域
+const cropResult = await CapacitorPluginOcr.cropImage({
+	imagePath: "/path/to/image.jpg",
+	cropArea: { x: 0.1, y: 0.1, width: 0.8, height: 0.5 },
+})
+// 结果: { croppedImagePath: "/path/to/cropped_xxx.jpg" }
+
+// 2. 交互式裁剪 - 让用户手动选择
+const cropResult = await CapacitorPluginOcr.startCropUI({
+	imagePath: "/path/to/image.jpg",
+})
+
+// 3. 识别时裁剪 - 识别前自动裁剪
+const ocrResult = await CapacitorPluginOcr.recognizeEnglishText({
+	imagePath: "/path/to/image.jpg",
+	cropArea: { x: 0, y: 0.2, width: 1, height: 0.6 }, // 只识别上半部分
+})
+```
+
+### 裁剪场景示例
+
+```typescript
+// 识别图片中间区域（去除边缘）
+cropArea: { x: 0.1, y: 0.1, width: 0.8, height: 0.8 }
+
+// 识别上半部分
+cropArea: { x: 0, y: 0, width: 1, height: 0.5 }
+
+// 识别下半部分
+cropArea: { x: 0, y: 0.5, width: 1, height: 0.5 }
+
+// 识别左侧1/3
+cropArea: { x: 0, y: 0, width: 0.33, height: 1 }
+```
 
 ### 返回结果格式
 

@@ -12,11 +12,11 @@
   },
   "author": "",
   "license": "MIT",
-  "dependencies": {},
   "devDependencies": {
     "@capacitor/ios": "^7.4.3",
-    "@types/node": "^20.0.0",
-    "typescript": "^5.0.0"
+    "@types/node": "^20.19.39",
+    "typescript": "^5.0.0",
+    "vue": "^3.5.33"
   },
   "peerDependencies": {
     "@capacitor/core": "^7.4.3"

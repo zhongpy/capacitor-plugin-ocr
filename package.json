@@ -1,10 +1,20 @@
 {
   "name": "capacitor-plugin-ocr",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Capacitor OCR Plugin for Vue3 - Text recognition for Android and iOS",
+  "type": "module",
   "main": "dist/index.js",
   "module": "dist/index.js",
   "types": "dist/index.d.ts",
+  "files": [
+    "android/build.gradle",
+    "android/src",
+    "dist",
+    "ios/CapacitorPluginOcr.podspec",
+    "ios/Plugin",
+    "LICENSE",
+    "README.md"
+  ],
   "scripts": {
     "build": "npm run tsc",
     "tsc": "tsc",
@@ -13,12 +23,23 @@
   "author": "",
   "license": "MIT",
   "devDependencies": {
+    "@capacitor/android": "^7.4.3",
+    "@capacitor/core": "^7.4.3",
     "@capacitor/ios": "^7.4.3",
     "@types/node": "^20.19.39",
     "typescript": "^5.0.0",
     "vue": "^3.5.33"
   },
   "peerDependencies": {
-    "@capacitor/core": "^7.4.3"
+    "@capacitor/core": "^7.4.3",
+    "vue": "^3.0.0"
+  },
+  "capacitor": {
+    "android": {
+      "path": "android"
+    },
+    "ios": {
+      "path": "ios"
+    }
   }
 }

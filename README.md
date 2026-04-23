@@ -1,229 +1,131 @@
 # Capacitor OCR Plugin
 
-适用于Vue3的Capacitor OCR插件，支持Android和iOS平台的文字识别功能。
+一个适用于 Capacitor 7 和 Vue 3 的 OCR 插件。Android 使用 Google ML Kit Text Recognition，iOS 使用系统 Vision 框架，支持从本地图片路径识别英文单词，并返回去重后的单词、原始单词列表和简单词形还原结果。
 
-## 功能特性
+## 功能
 
-- 📷 支持拍照和从相册选择图片进行识别
-- 🔤 只识别英文单词，自动过滤其他字符
-- 📝 单词去重处理
-- 🔄 变形词处理：输出时显示"识别词 + 词根"（如：played + play）
-- 📱 支持Android和iOS平台
-- 🔐 自动请求摄像头和相册权限
-
-## 技术栈
-
-- **Capacitor**: 7.4.3
-- **Android**: Tesseract OCR + 内置词形还原
-- **iOS**: Vision框架 + 内置词形还原
-- **Vue3**: 组合式API
+- Android/iOS 原生 OCR。
+- 只提取英文单词。
+- 返回 `words` 去重结果和 `rawWords` 原始识别结果。
+- 支持可选的百分比裁剪区域。
+- 提供 Vue 3 `useOcr()` helper。
 
 ## 安装
 
 ```bash
 npm install capacitor-plugin-ocr
+npx cap sync
 ```
 
-## 使用方法
+如果需要拍照或从相册选图，建议在业务 App 中使用 `@capacitor/camera` 获取图片路径，并优先把 `photo.path` 传给本插件。`photo.webPath` 主要给 WebView 显示使用，不建议直接传给原生 OCR。
 
-### 1. 注册插件
+## 基础用法
 
-在 `main.ts` 中：
+```ts
+import CapacitorPluginOcr from 'capacitor-plugin-ocr';
 
-```typescript
-import { CapacitorOcrVuePlugin } from "capacitor-plugin-ocr"
-import { createApp } from "vue"
-import App from "./App.vue"
+const result = await CapacitorPluginOcr.recognizeEnglishText({
+  imagePath: '/path/to/image.jpg',
+});
 
-const app = createApp(App)
-app.use(CapacitorOcrVuePlugin)
-app.mount("#app")
+console.log(result.words);
 ```
 
-### 2. 使用组合式API
+## Vue 3 用法
+
+```ts
+import { createApp } from 'vue';
+import App from './App.vue';
+import { CapacitorOcrVuePlugin } from 'capacitor-plugin-ocr';
+
+createApp(App).use(CapacitorOcrVuePlugin).mount('#app');
+```
 
 ```vue
-<template>
-	<div>
-		<button @click="takePhoto">拍照识别</button>
-		<button @click="pickFromGallery">从相册选择</button>
-
-		<div v-if="isProcessing">识别中...</div>
-
-		<div v-if="result">
-			<h3>识别结果：</h3>
-			<ul>
-				<li v-for="word in result.words" :key="word.word">
-					{{ word.word }}
-					<span v-if="word.lemma">({{ word.lemma }})</span>
-				</li>
-			</ul>
-		</div>
-
-		<div v-if="error" style="color: red;">{{ error }}</div>
-	</div>
-</template>
-
 <script setup lang="ts">
-import { useOcr } from "capacitor-plugin-ocr"
-import { Camera, CameraResultType } from "@capacitor/camera"
+import { useOcr } from 'capacitor-plugin-ocr';
 
-const { isProcessing, error, result, requestPermissions, recognizeFromImage } = useOcr()
+const { isProcessing, error, result, recognizeFromImage } = useOcr();
 
-async function takePhoto() {
-	// 请求权限
-	const hasPermission = await requestPermissions()
-	if (!hasPermission) {
-		alert("需要摄像头权限")
-		return
-	}
-
-	// 拍照
-	const photo = await Camera.getPhoto({
-		resultType: CameraResultType.Uri,
-		source: CameraSource.Camera,
-		quality: 90,
-	})
-
-	// 识别文字
-	await recognizeFromImage(photo.path)
-}
-
-async function pickFromGallery() {
-	// 请求权限
-	const hasPermission = await requestPermissions()
-	if (!hasPermission) {
-		alert("需要相册权限")
-		return
-	}
-
-	// 从相册选择
-	const photo = await Camera.getPhoto({
-		resultType: CameraResultType.Uri,
-		source: CameraSource.Photos,
-		quality: 90,
-	})
-
-	// 识别文字
-	await recognizeFromImage(photo.path)
+async function runOcr(imagePath: string) {
+  await recognizeFromImage(imagePath);
 }
 </script>
 ```
 
-### 3. 直接调用方法
-
-```typescript
-import { requestOcrPermissions, recognizeEnglishFromImage } from "capacitor-plugin-ocr"
-
-// 检查权限
-const hasPermission = await requestOcrPermissions()
-
-// 识别图片
-const result = await recognizeEnglishFromImage("/path/to/image.jpg")
-// result: { words: [...], rawWords: [...] }
-```
-
 ## API
 
-### 方法
+### `recognizeEnglishText(options)`
 
-| 方法                                             | 描述                         |
-| ------------------------------------------------ | ---------------------------- |
-| `checkPermissions()`                             | 检查权限状态                 |
-| `requestPermissions()`                           | 请求权限                     |
-| `recognizeEnglishText({ imagePath, cropArea? })` | 识别图片中的英文（可选裁剪） |
-| `cropImage({ imagePath, cropArea })`             | 裁剪图片                     |
-| `startCropUI({ imagePath })`                     | 启动交互式裁剪UI             |
+```ts
+CapacitorPluginOcr.recognizeEnglishText({
+  imagePath: '/path/to/image.jpg',
+  cropArea: { x: 0.1, y: 0.1, width: 0.8, height: 0.8 },
+});
+```
 
-### 裁剪区域格式
+`cropArea` 使用 0 到 1 的百分比坐标，相对于原图尺寸：
 
-```typescript
+```ts
 interface CropArea {
-	x: number // 左上角X坐标（0-1）
-	y: number // 左上角Y坐标（0-1）
-	width: number // 宽度（0-1）
-	height: number // 高度（0-1）
+  x: number;
+  y: number;
+  width: number;
+  height: number;
 }
 ```
 
-### 使用示例
+返回值：
 
-```typescript
-// 1. 编程式裁剪 - 指定区域
-const cropResult = await CapacitorPluginOcr.cropImage({
-	imagePath: "/path/to/image.jpg",
-	cropArea: { x: 0.1, y: 0.1, width: 0.8, height: 0.5 },
-})
-// 结果: { croppedImagePath: "/path/to/cropped_xxx.jpg" }
-
-// 2. 交互式裁剪 - 让用户手动选择
-const cropResult = await CapacitorPluginOcr.startCropUI({
-	imagePath: "/path/to/image.jpg",
-})
-
-// 3. 识别时裁剪 - 识别前自动裁剪
-const ocrResult = await CapacitorPluginOcr.recognizeEnglishText({
-	imagePath: "/path/to/image.jpg",
-	cropArea: { x: 0, y: 0.2, width: 1, height: 0.6 }, // 只识别上半部分
-})
-```
-
-### 裁剪场景示例
-
-```typescript
-// 识别图片中间区域（去除边缘）
-cropArea: { x: 0.1, y: 0.1, width: 0.8, height: 0.8 }
-
-// 识别上半部分
-cropArea: { x: 0, y: 0, width: 1, height: 0.5 }
-
-// 识别下半部分
-cropArea: { x: 0, y: 0.5, width: 1, height: 0.5 }
-
-// 识别左侧1/3
-cropArea: { x: 0, y: 0, width: 0.33, height: 1 }
-```
-
-### 返回结果格式
-
-```typescript
+```ts
 interface OcrResult {
-	words: OcrWordResult[]
-	rawWords: string[]
-}
-
-interface OcrWordResult {
-	word: string // 识别出的单词
-	lemma?: string // 词根（仅当与原词不同时存在）
-	confidence: number // 置信度
+  words: Array<{
+    word: string;
+    lemma?: string;
+    confidence: number;
+  }>;
+  rawWords: string[];
 }
 ```
 
-## Android配置
+### `cropImage(options)`
 
-需要在Android项目中添加Tesseract语言数据文件：
+按百分比区域裁剪图片，并返回临时文件路径。
 
-- 将 `eng.traineddata` 放入 `android/app/src/main/assets/tessdata/` 目录
+```ts
+const cropResult = await CapacitorPluginOcr.cropImage({
+  imagePath: '/path/to/image.jpg',
+  cropArea: { x: 0, y: 0.25, width: 1, height: 0.5 },
+});
+```
 
-可以从以下地址下载：
-https://github.com/tesseract-ocr/tessdata
+### `checkPermissions()` / `requestPermissions()`
 
-## iOS配置
+当前版本不直接打开相机或相册，因此这两个方法返回 `{ granted: true }`。相机和相册权限应由调用方使用的图片选择插件负责。
 
-iOS使用系统Vision框架，无需额外配置。
+### `startCropUI(options)`
 
-## 权限说明
+当前版本不提供原生交互式裁剪 UI。请使用 `cropImage()` 或在业务 App 中接入专用裁剪组件。
+
+## 平台说明
 
 ### Android
 
-- `CAMERA` - 拍照
-- `READ_EXTERNAL_STORAGE` / `READ_MEDIA_IMAGES` - 读取相册
+插件依赖：
+
+```gradle
+implementation 'com.google.mlkit:text-recognition:16.0.1'
+```
+
+宿主 Android 工程需要能访问 `google()` 和 `mavenCentral()`。
 
 ### iOS
 
-- `NSCameraUsageDescription`
-- `NSPhotoLibraryUsageDescription`
+iOS 使用系统 Vision 框架，最低支持 iOS 13。
 
-## License
+## 开发
 
-MIT
+```bash
+npm install
+npm run build
+```

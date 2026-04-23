@@ -1,11 +1,26 @@
 import { registerPlugin } from '@capacitor/core';
 import type { CapacitorPluginOcrPlugin } from './definitions';
 
-// Re-export all types and interfaces
-export type { OcrWordResult, OcrResult, ImageSourceType, CapacitorPluginOcrPlugin } from './definitions';
+export type {
+  CapacitorPluginOcrPlugin,
+  CropArea,
+  CropImageOptions,
+  CropResult,
+  ImageSourceType,
+  OcrResult,
+  OcrWordResult,
+  PermissionResult,
+  RecognizeEnglishTextOptions,
+  StartCropUIOptions,
+} from './definitions';
 
-// Import Vue plugin and re-export
-import { CapacitorOcrVuePlugin, useOcr, requestOcrPermissions, checkOcrPermissions, recognizeEnglishFromImage } from './vue-plugin';
+import {
+  CapacitorOcrVuePlugin,
+  checkOcrPermissions,
+  recognizeEnglishFromImage,
+  requestOcrPermissions,
+  useOcr,
+} from './vue-plugin';
 
 export { CapacitorOcrVuePlugin, useOcr, requestOcrPermissions, checkOcrPermissions, recognizeEnglishFromImage };
 

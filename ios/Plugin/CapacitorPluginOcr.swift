@@ -1,123 +1,161 @@
+import Capacitor
 import Foundation
-import UIKit
-import AVFoundation
+import ImageIO
 import Photos
+import UIKit
+import Vision
 
 @objc(CapacitorPluginOcr)
-class CapacitorPluginOcr: NSObject {
-    
-    private var pendingCall: CAPPluginCall?
-    private var imagePicker: UIImagePickerController?
-    
-    @objc static func moduleName() -> String {
-        return "CapacitorPluginOcr"
+public class CapacitorPluginOcr: CAPPlugin, CAPBridgedPlugin {
+    public let identifier = "CapacitorPluginOcr"
+    public let jsName = "CapacitorPluginOcr"
+    public let pluginMethods: [CAPPluginMethod] = [
+        CAPPluginMethod(#selector(checkPermissions(_:)), returnType: .promise),
+        CAPPluginMethod(#selector(requestPermissions(_:)), returnType: .promise),
+        CAPPluginMethod(#selector(recognizeEnglishText(_:)), returnType: .promise),
+        CAPPluginMethod(#selector(cropImage(_:)), returnType: .promise),
+        CAPPluginMethod(#selector(startCropUI(_:)), returnType: .promise)
+    ]
+
+    @objc public override func checkPermissions(_ call: CAPPluginCall) {
+        call.resolve(["granted": true])
     }
-    
-    @objc static func requires() -> [Any]? {
-        return nil
+
+    @objc public override func requestPermissions(_ call: CAPPluginCall) {
+        call.resolve(["granted": true])
     }
-    
-    @objc func checkPermissions(_ call: CAPPluginCall) {
-        var cameraGranted = false
-        var photoLibraryGranted = false
-        
-        let cameraStatus = AVCaptureDevice.authorizationStatus(for: .video)
-        cameraGranted = cameraStatus == .authorized
-        
-        let photoStatus = PHPhotoLibrary.authorizationStatus(for: .readWrite)
-        photoLibraryGranted = photoStatus == .authorized
-        
-        let result: [String: Any] = [
-            "granted": cameraGranted && photoLibraryGranted
-        ]
-        call.resolve(result)
-    }
-    
-    @objc func requestPermissions(_ call: CAPPluginCall) {
-        pendingCall = call
-        
-        // Request camera permission
-        AVCaptureDevice.requestAccess(for: .video) { [weak self] cameraGranted in
-            // Then request photo library permission
-            PHPhotoLibrary.requestAuthorization(for: .readWrite) { photoGranted in
-                DispatchQueue.main.async {
-                    let result: [String: Any] = [
-                        "granted": cameraGranted && photoGranted
-                    ]
-                    call.resolve(result)
-                }
-            }
-        }
-    }
-    
-    @objc func recognizeEnglishText(_ call: CAPPluginCall) {
-        guard let imagePath = call.getString("imagePath") else {
+
+    @objc public func recognizeEnglishText(_ call: CAPPluginCall) {
+        guard let imagePath = call.getString("imagePath"), !imagePath.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             call.reject("Image path is required")
             return
         }
-        
-        // Handle different path formats
-        var image: UIImage?
-        
-        if imagePath.hasPrefix("file://") {
-            let path = String(imagePath.dropFirst(7))
-            image = UIImage(contentsOfFile: path)
-        } else if imagePath.hasPrefix("ph://") {
-            // Handle Photos framework URLs
-            let assetId = String(imagePath.dropFirst(5))
-            loadImageFromPhotosLibrary(assetId: assetId, call: call)
-            return
-        } else if imagePath.hasPrefix("content://") {
-            // Handle content URIs
-            if let url = URL(string: imagePath), let data = try? Data(contentsOf: url) {
-                image = UIImage(data: data)
+
+        let cropArea = call.getObject("cropArea")
+        loadImage(from: imagePath) { [weak self] image, errorMessage in
+            guard let self = self else { return }
+
+            if let errorMessage = errorMessage {
+                call.reject(errorMessage)
+                return
             }
-        } else {
-            // Try as file path
-            image = UIImage(contentsOfFile: imagePath)
+
+            guard var workingImage = image else {
+                call.reject("Could not load image")
+                return
+            }
+
+            if let cropArea = cropArea {
+                guard let croppedImage = self.crop(image: workingImage, cropArea: cropArea) else {
+                    call.reject("Could not crop image")
+                    return
+                }
+                workingImage = croppedImage
+            }
+
+            self.performOCR(on: workingImage, call: call)
         }
-        
-        guard let processedImage = image else {
-            call.reject("Could not load image from path: \(imagePath)")
-            return
-        }
-        
-        performOCR(on: processedImage, call: call)
     }
-    
-    private func loadImageFromPhotosLibrary(assetId: String, call: CAPPluginCall) {
-        let fetchResult = PHAsset.fetchAssets(withLocalIdentifiers: [assetId], options: nil)
-        
-        guard let asset = fetchResult.firstObject else {
-            call.reject("Could not find photo with id: \(assetId)")
+
+    @objc public func cropImage(_ call: CAPPluginCall) {
+        guard let imagePath = call.getString("imagePath"), !imagePath.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            call.reject("Image path is required")
             return
         }
-        
+
+        guard let cropArea = call.getObject("cropArea") else {
+            call.reject("Crop area is required")
+            return
+        }
+
+        loadImage(from: imagePath) { [weak self] image, errorMessage in
+            guard let self = self else { return }
+
+            if let errorMessage = errorMessage {
+                call.reject(errorMessage)
+                return
+            }
+
+            guard let image = image, let croppedImage = self.crop(image: image, cropArea: cropArea) else {
+                call.reject("Could not crop image")
+                return
+            }
+
+            do {
+                let filePath = try self.writeTemporaryJpeg(croppedImage)
+                call.resolve(["croppedImagePath": filePath])
+            } catch {
+                call.reject("Could not save cropped image: \(error.localizedDescription)")
+            }
+        }
+    }
+
+    @objc public func startCropUI(_ call: CAPPluginCall) {
+        call.reject("Interactive crop UI is not implemented. Use cropImage with a cropArea instead.")
+    }
+
+    private func loadImage(from imagePath: String, completion: @escaping (UIImage?, String?) -> Void) {
+        let trimmedPath = imagePath.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        if trimmedPath.hasPrefix("ph://") {
+            loadPhotoAsset(identifier: String(trimmedPath.dropFirst(5)), completion: completion)
+            return
+        }
+
+        if trimmedPath.hasPrefix("file://"), let url = URL(string: trimmedPath) {
+            completion(UIImage(contentsOfFile: url.path), nil)
+            return
+        }
+
+        if let url = URL(string: trimmedPath), url.scheme != nil, url.scheme != "file" {
+            DispatchQueue.global(qos: .userInitiated).async {
+                do {
+                    let data = try Data(contentsOf: url)
+                    let image = UIImage(data: data)
+                    DispatchQueue.main.async {
+                        completion(image, image == nil ? "Could not decode image data" : nil)
+                    }
+                } catch {
+                    DispatchQueue.main.async {
+                        completion(nil, "Could not load image: \(error.localizedDescription)")
+                    }
+                }
+            }
+            return
+        }
+
+        completion(UIImage(contentsOfFile: trimmedPath), nil)
+    }
+
+    private func loadPhotoAsset(identifier: String, completion: @escaping (UIImage?, String?) -> Void) {
+        let fetchResult = PHAsset.fetchAssets(withLocalIdentifiers: [identifier], options: nil)
+        guard let asset = fetchResult.firstObject else {
+            completion(nil, "Could not find photo asset")
+            return
+        }
+
         let options = PHImageRequestOptions()
-        options.isSynchronous = false
         options.deliveryMode = .highQualityFormat
-        
+        options.isNetworkAccessAllowed = true
+
         PHImageManager.default().requestImage(
             for: asset,
             targetSize: PHImageManagerMaximumSize,
             contentMode: .default,
             options: options
-        ) { [weak self] image, _ in
-            if let image = image {
-                self?.performOCR(on: image, call: call)
-            } else {
-                call.reject("Could not load image from Photos")
+        ) { image, _ in
+            DispatchQueue.main.async {
+                completion(image, image == nil ? "Could not load photo asset" : nil)
             }
         }
     }
-    
+
     private func performOCR(on image: UIImage, call: CAPPluginCall) {
-        // Use Vision framework for OCR (available in iOS 13+)
         guard let cgImage = image.cgImage else {
             call.reject("Could not get CGImage from UIImage")
             return
         }
-        
+
         let request = VNRecognizeTextRequest { [weak self] request, error in
             if let error = error {
                 DispatchQueue.main.async {
@@ -125,31 +163,24 @@ class CapacitorPluginOcr: NSObject {
                 }
                 return
             }
-            
-            guard let observations = request.results as? [VNRecognizedTextObservation] else {
-                DispatchQueue.main.async {
-                    call.reject("No text found in image")
-                }
-                return
-            }
-            
-            let result = self?.processOCRResults(observations)
+
+            let observations = request.results as? [VNRecognizedTextObservation] ?? []
+            let result = self?.processOCRResults(observations) ?? ["words": [], "rawWords": []]
             DispatchQueue.main.async {
-                if let result = result {
-                    call.resolve(result)
-                } else {
-                    call.reject("Failed to process OCR results")
-                }
+                call.resolve(result)
             }
         }
-        
-        // Configure for English only
+
         request.recognitionLanguages = ["en-US"]
-        request.usesLanguageCorrection = true
         request.recognitionLevel = .accurate
-        
-        let handler = VNImageRequestHandler(cgImage: cgImage, options: [:])
-        
+        request.usesLanguageCorrection = true
+
+        let handler = VNImageRequestHandler(
+            cgImage: cgImage,
+            orientation: CGImagePropertyOrientation(image.imageOrientation),
+            options: [:]
+        )
+
         DispatchQueue.global(qos: .userInitiated).async {
             do {
                 try handler.perform([request])
@@ -160,285 +191,221 @@ class CapacitorPluginOcr: NSObject {
             }
         }
     }
-    
+
     private func processOCRResults(_ observations: [VNRecognizedTextObservation]) -> [String: Any] {
+        let regex = try? NSRegularExpression(pattern: "[a-zA-Z]+", options: [])
         var uniqueWords = Set<String>()
         var rawWords: [String] = []
         var resultWords: [[String: Any]] = []
-        
-        // Pattern for English words only
-        let englishPattern = "[a-zA-Z]+"
-        guard let regex = try? NSRegularExpression(pattern: englishPattern, options: []) else {
-            return ["words": [], "rawWords": []]
-        }
-        
+
         for observation in observations {
-            guard let topCandidate = observation.topCandidates(1).first else { continue }
-            
-            let text = topCandidate.string
+            guard let candidate = observation.topCandidates(1).first else { continue }
+            let text = candidate.string
             let range = NSRange(text.startIndex..<text.endIndex, in: text)
-            let matches = regex.matches(in: text, options: [], range: range)
-            
-            for match in matches {
-                if let wordRange = Range(match.range, in: text) {
-                    let word = String(text[wordRange]).lowercased()
-                    
-                    if word.count > 1 {
-                        rawWords.append(word)
-                        
-                        if !uniqueWords.contains(word) {
-                            uniqueWords.insert(word)
-                            
-                            // Get lemma
-                            let lemma = lemmatize(word)
-                            
-                            var wordResult: [String: Any] = [
-                                "word": word,
-                                "confidence": Double(topCandidate.confidence)
-                            ]
-                            
-                            if lemma != word {
-                                wordResult["lemma"] = lemma
-                            }
-                            
-                            resultWords.append(wordResult)
-                        }
+
+            regex?.matches(in: text, options: [], range: range).forEach { match in
+                guard let wordRange = Range(match.range, in: text) else { return }
+
+                let word = String(text[wordRange]).lowercased()
+                if word.count <= 1 {
+                    return
+                }
+
+                rawWords.append(word)
+                if uniqueWords.insert(word).inserted {
+                    let lemma = lemmatize(word)
+                    var wordResult: [String: Any] = [
+                        "word": word,
+                        "confidence": Double(candidate.confidence)
+                    ]
+
+                    if lemma != word {
+                        wordResult["lemma"] = lemma
                     }
+
+                    resultWords.append(wordResult)
                 }
             }
         }
-        
+
         return [
             "words": resultWords,
             "rawWords": rawWords
         ]
     }
-    
-    // MARK: - Crop Methods
-    
-    @objc func cropImage(_ call: CAPPluginCall) {
-        guard let imagePath = call.getString("imagePath"),
-              let cropData = call.getObject("cropArea") else {
-            call.reject("Image path and crop area are required")
-            return
+
+    private func crop(image: UIImage, cropArea: JSObject) -> UIImage? {
+        guard let cgImage = image.cgImage else {
+            return nil
         }
-        
-        let x = cropData["x"] as? Double ?? 0
-        let y = cropData["y"] as? Double ?? 0
-        let width = cropData["width"] as? Double ?? 1
-        let height = cropData["height"] as? Double ?? 1
-        
-        var image: UIImage?
-        
-        if imagePath.hasPrefix("file://") {
-            let path = String(imagePath.dropFirst(7))
-            image = UIImage(contentsOfFile: path)
-        } else {
-            image = UIImage(contentsOfFile: imagePath)
+
+        let imageWidth = CGFloat(cgImage.width)
+        let imageHeight = CGFloat(cgImage.height)
+        let x = CGFloat(clamp(doubleValue(cropArea["x"], defaultValue: 0), min: 0, max: 1))
+        let y = CGFloat(clamp(doubleValue(cropArea["y"], defaultValue: 0), min: 0, max: 1))
+        let width = CGFloat(clamp(doubleValue(cropArea["width"], defaultValue: 1), min: 0, max: 1))
+        let height = CGFloat(clamp(doubleValue(cropArea["height"], defaultValue: 1), min: 0, max: 1))
+
+        let cropX = min(x * imageWidth, imageWidth - 1)
+        let cropY = min(y * imageHeight, imageHeight - 1)
+        let cropWidth = max(1, min(width * imageWidth, imageWidth - cropX))
+        let cropHeight = max(1, min(height * imageHeight, imageHeight - cropY))
+        let cropRect = CGRect(x: cropX, y: cropY, width: cropWidth, height: cropHeight)
+
+        guard let croppedCGImage = cgImage.cropping(to: cropRect) else {
+            return nil
         }
-        
-        guard let originalImage = image, let cgImage = originalImage.cgImage else {
-            call.reject("Could not load image")
-            return
-        }
-        
-        let imgWidth = CGFloat(cgImage.width)
-        let imgHeight = CGFloat(cgImage.height)
-        
-        let cropX = Int(x * imgWidth)
-        let cropY = Int(y * imgHeight)
-        let cropW = Int(width * imgWidth)
-        let cropH = Int(height * imgHeight)
-        
-        guard let croppedCGImage = cgImage.cropping(to: CGRect(x: cropX, y: cropY, width: cropW, height: cropH)) else {
-            call.reject("Could not crop image")
-            return
-        }
-        
-        let croppedImage = UIImage(cgImage: croppedCGImage, scale: originalImage.scale, orientation: originalImage.imageOrientation)
-        
-        // Save to temp file
-        guard let data = croppedImage.jpegData(compressionQuality: 0.9) else {
-            call.reject("Could not create image data")
-            return
-        }
-        
-        let tempDir = NSTemporaryDirectory()
-        let fileName = "cropped_\(Int(Date().timeIntervalSince1970 * 1000)).jpg"
-        let filePath = (tempDir as NSString).appendingPathComponent(fileName)
-        
-        do {
-            try data.write(to: URL(fileURLWithPath: filePath))
-            call.resolve(["croppedImagePath": filePath])
-        } catch {
-            call.reject("Could not save cropped image: \(error.localizedDescription)")
-        }
+
+        return UIImage(cgImage: croppedCGImage, scale: image.scale, orientation: image.imageOrientation)
     }
-    
-    @objc func startCropUI(_ call: CAPPluginCall) {
-        guard let imagePath = call.getString("imagePath") else {
-            call.reject("Image path is required")
-            return
+
+    private func writeTemporaryJpeg(_ image: UIImage) throws -> String {
+        guard let data = image.jpegData(compressionQuality: 0.92) else {
+            throw OcrPluginError.imageEncodingFailed
         }
-        
-        var image: UIImage?
-        
-        if imagePath.hasPrefix("file://") {
-            let path = String(imagePath.dropFirst(7))
-            image = UIImage(contentsOfFile: path)
-        } else {
-            image = UIImage(contentsOfFile: imagePath)
-        }
-        
-        guard let selectedImage = image else {
-            call.reject("Could not load image")
-            return
-        }
-        
-        // For iOS, we'll use the built-in crop view controller
-        // This requires implementing a custom UIImagePickerController or using a library
-        // For now, we'll just reject with a message to implement custom UI
-        
-        pendingCall = call
-        
-        // Present image picker with crop enabled
-        DispatchQueue.main.async { [weak self] in
-            guard let self = self else { return }
-            
-            if UIImagePickerController.isSourceTypeAvailable(.photoLibrary) {
-                let picker = UIImagePickerController()
-                picker.sourceType = .photoLibrary
-                picker.delegate = self
-                picker.allowsEditing = true
-                
-                if let vc = self.bridge?.viewController {
-                    vc.present(picker, animated: true)
-                } else {
-                    call.reject("Could not present picker")
-                }
-            } else {
-                call.reject("Photo library not available")
-            }
-        }
+
+        let fileURL = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("ocr_crop_\(Int(Date().timeIntervalSince1970 * 1000)).jpg")
+        try data.write(to: fileURL, options: .atomic)
+        return fileURL.path
     }
-    
-    // Simple lemmatizer using common rules
+
+    private func doubleValue(_ value: Any?, defaultValue: Double) -> Double {
+        if let double = value as? Double {
+            return double
+        }
+
+        if let number = value as? NSNumber {
+            return number.doubleValue
+        }
+
+        return defaultValue
+    }
+
+    private func clamp(_ value: Double, min: Double, max: Double) -> Double {
+        Swift.max(min, Swift.min(max, value))
+    }
+
     private func lemmatize(_ word: String) -> String {
         let lowerWord = word.lowercased()
-        
-        // Irregular verbs dictionary
         let irregularVerbs: [String: String] = [
             "was": "be", "were": "be", "been": "be", "being": "be",
             "had": "have", "has": "have",
             "did": "do", "done": "do",
             "went": "go", "gone": "go",
-            "came": "come", "came": "come",
-            "took": "take", "took": "take",
+            "came": "come",
+            "took": "take",
             "saw": "see", "seen": "see",
             "knew": "know", "known": "know",
-            "thought": "think", "thought": "think",
-            "said": "say", "said": "say",
-            "told": "tell", "told": "tell",
-            "got": "get", "got": "get",
-            "made": "make", "made": "make",
-            "gave": "give", "gave": "give",
-            "found": "find", "found": "find",
-            "became": "become", "became": "become",
-            "left": "leave", "left": "leave",
-            "kept": "keep", "kept": "keep",
-            "began": "begin", "began": "begin",
-            "shown": "show", "shown": "show",
-            "heard": "hear", "heard": "hear",
-            "played": "play", "played": "play",
-            "ran": "run", "ran": "run",
-            "moved": "move", "moved": "move",
-            "lived": "live", "lived": "live",
-            "believed": "believe", "believed": "believe",
-            "brought": "bring", "brought": "bring",
-            "wrote": "write", "wrote": "write",
-            "sat": "sit", "sat": "sit",
-            "stood": "stand", "stood": "stand",
-            "lost": "lose", "lost": "lose",
-            "paid": "pay", "paid": "pay",
-            "met": "meet", "met": "meet",
-            "built": "build", "built": "build",
-            "stayed": "stay", "stayed": "stay",
-            "fell": "fall", "fell": "fall",
-            "cut": "cut", "cut": "cut",
-            "sold": "sell", "sold": "sell",
-            "sent": "send", "sent": "send",
-            "died": "die", "died": "die"
+            "thought": "think",
+            "said": "say",
+            "told": "tell",
+            "got": "get",
+            "made": "make",
+            "gave": "give",
+            "found": "find",
+            "became": "become",
+            "left": "leave",
+            "kept": "keep",
+            "began": "begin",
+            "shown": "show",
+            "heard": "hear",
+            "played": "play",
+            "ran": "run",
+            "moved": "move",
+            "lived": "live",
+            "believed": "believe",
+            "brought": "bring",
+            "wrote": "write",
+            "sat": "sit",
+            "stood": "stand",
+            "lost": "lose",
+            "paid": "pay",
+            "met": "meet",
+            "built": "build",
+            "stayed": "stay",
+            "fell": "fall",
+            "sold": "sell",
+            "sent": "send",
+            "died": "die"
         ]
-        
-        // Check irregular verbs
+
         if let lemma = irregularVerbs[lowerWord] {
             return lemma
         }
-        
-        let length = lowerWord.count
-        guard length > 2 else { return lowerWord }
-        
-        // Past tense (-ed)
-        if lowerWord.hasSuffix("ed") && length > 3 {
-            var base = String(lowerWord.dropLast(2))
-            
-            // Handle -ied -> -y
-            if lowerWord.hasSuffix("ied") && length > 3 {
-                return String(lowerWord.dropLast(3)) + "y"
-            }
-            
-            // Handle doubled consonant
-            if let last = base.last, let secondLast = base.dropLast().last {
-                let consonants = "bcdfghjklmnpqrstvwxyz"
-                if consonants.contains(last) && last == secondLast {
-                    base = String(base.dropLast())
-                }
-            }
-            
-            return base
+
+        if lowerWord.count > 3 && lowerWord.hasSuffix("ied") {
+            return String(lowerWord.dropLast(3)) + "y"
         }
-        
-        // Progressive/Continuous (-ing)
-        if lowerWord.hasSuffix("ing") && length > 4 {
-            var base = String(lowerWord.dropLast(3))
-            
-            // Handle doubled consonant
-            if let last = base.last, let secondLast = base.dropLast().last {
-                let consonants = "bcdfghjklmnpqrstvwxyz"
-                if consonants.contains(last) && last == secondLast {
-                    base = String(base.dropLast())
-                }
-            }
-            
-            return base
+
+        if lowerWord.count > 3 && lowerWord.hasSuffix("ed") {
+            return removeDoubledFinalConsonant(String(lowerWord.dropLast(2)))
         }
-        
-        // Plural (-s, -es)
-        if lowerWord.hasSuffix("s") || lowerWord.hasSuffix("es") {
-            // -ies -> -y
-            if lowerWord.hasSuffix("ies") && length > 3 {
-                return String(lowerWord.dropLast(3)) + "y"
+
+        if lowerWord.count > 4 && lowerWord.hasSuffix("ing") {
+            return removeDoubledFinalConsonant(String(lowerWord.dropLast(3)))
+        }
+
+        if lowerWord.count > 3 && lowerWord.hasSuffix("ies") {
+            return String(lowerWord.dropLast(3)) + "y"
+        }
+
+        if lowerWord.count > 3 && lowerWord.hasSuffix("es") {
+            let base = String(lowerWord.dropLast(2))
+            if ["sh", "ch", "x", "z", "ss"].contains(where: { base.hasSuffix($0) }) {
+                return base
             }
-            
-            // -es
-            if lowerWord.hasSuffix("es") && length > 3 {
-                let base = String(lowerWord.dropLast(2))
-                let esEndings = ["sh", "ch", "x", "z", "ss"]
-                if esEndings.contains(where: { base.hasSuffix($0) }) {
-                    return base
-                }
-                return String(lowerWord.dropLast(1))
-            }
-            
-            // -s
-            if lowerWord.hasSuffix("s") && length > 2 {
-                let base = String(lowerWord.dropLast(1))
-                if !base.hasSuffix("ss") {
-                    return base
-                }
+            return String(lowerWord.dropLast(1))
+        }
+
+        if lowerWord.count > 2 && lowerWord.hasSuffix("s") {
+            let base = String(lowerWord.dropLast(1))
+            if !base.hasSuffix("s") {
+                return base
             }
         }
-        
+
         return lowerWord
+    }
+
+    private func removeDoubledFinalConsonant(_ word: String) -> String {
+        guard word.count > 2, let last = word.last, let previous = word.dropLast().last else {
+            return word
+        }
+
+        if last == previous && "bcdfghjklmnpqrstvwxyz".contains(last) {
+            return String(word.dropLast())
+        }
+
+        return word
+    }
+}
+
+private enum OcrPluginError: Error {
+    case imageEncodingFailed
+}
+
+private extension CGImagePropertyOrientation {
+    init(_ orientation: UIImage.Orientation) {
+        switch orientation {
+        case .up:
+            self = .up
+        case .upMirrored:
+            self = .upMirrored
+        case .down:
+            self = .down
+        case .downMirrored:
+            self = .downMirrored
+        case .left:
+            self = .left
+        case .leftMirrored:
+            self = .leftMirrored
+        case .right:
+            self = .right
+        case .rightMirrored:
+            self = .rightMirrored
+        @unknown default:
+            self = .up
+        }
     }
 }

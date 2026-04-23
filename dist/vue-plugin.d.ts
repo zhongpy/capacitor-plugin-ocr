@@ -1,5 +1,5 @@
 import type { App } from 'vue';
-import type { CropArea, OcrResult } from './definitions';
+import type { CropArea, OcrResult } from './definitions.js';
 export declare function requestOcrPermissions(): Promise<boolean>;
 export declare function checkOcrPermissions(): Promise<boolean>;
 export declare function recognizeEnglishFromImage(imagePath: string, cropArea?: CropArea): Promise<OcrResult>;

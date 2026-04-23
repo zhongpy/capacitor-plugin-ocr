@@ -1,6 +1,6 @@
 {
   "name": "capacitor-plugin-ocr",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "description": "Capacitor OCR Plugin for Vue3 - Text recognition for Android and iOS",
   "type": "module",
   "main": "dist/index.js",

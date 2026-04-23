@@ -1,8 +1,8 @@
 import { Capacitor } from '@capacitor/core';
 import type { App } from 'vue';
 import { readonly, ref } from 'vue';
-import type { CropArea, OcrResult } from './definitions';
-import CapacitorPluginOcr from './index';
+import type { CropArea, OcrResult } from './definitions.js';
+import CapacitorPluginOcr from './index.js';
 
 export async function requestOcrPermissions(): Promise<boolean> {
   if (Capacitor.isNativePlatform()) {

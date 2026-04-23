@@ -1,6 +1,6 @@
 import { Capacitor } from '@capacitor/core';
 import { readonly, ref } from 'vue';
-import CapacitorPluginOcr from './index';
+import CapacitorPluginOcr from './index.js';
 export async function requestOcrPermissions() {
     if (Capacitor.isNativePlatform()) {
         const result = await CapacitorPluginOcr.requestPermissions();
